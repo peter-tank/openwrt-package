@@ -1,6 +1,5 @@
-local d = require "luci.dispatcher"
-local _api = require "luci.model.cbi.passwall.api.api"
-local e = luci.model.uci.cursor()
+local api = require "luci.model.cbi.passwall.api.api"
+local appname = api.appname
 
 m = Map("passwall_server", translate("Server-Side"))
 
@@ -14,10 +13,11 @@ e.rmempty = false
 t = m:section(TypedSection, "user", translate("Users Manager"))
 t.anonymous = true
 t.addremove = true
+t.sortable = true
 t.template = "cbi/tblsection"
-t.extedit = d.build_url("admin", "services", "passwall", "server_user", "%s")
+t.extedit = api.url("server_user", "%s")
 function t.create(e, t)
-    local uuid = _api.gen_uuid()
+    local uuid = api.gen_uuid()
     t = uuid
     TypedSection.create(e, t)
     luci.http.redirect(e.extedit:format(t))
@@ -25,7 +25,7 @@ end
 function t.remove(e, t)
     e.map.proceed = true
     e.map:del(t)
-    luci.http.redirect(d.build_url("admin", "services", "passwall", "server"))
+    luci.http.redirect(api.url("server"))
 end
 
 e = t:option(Flag, "enable", translate("Enable"))
@@ -33,16 +33,39 @@ e.width = "5%"
 e.rmempty = false
 
 e = t:option(DummyValue, "status", translate("Status"))
-e.template = "passwall/server/users_status"
-e.value = translate("Collecting data...")
+e.rawhtml = true
+e.cfgvalue = function(t, n)
+    return string.format('<font class="_users_status">%s</font>', translate("Collecting data..."))
+end
 
 e = t:option(DummyValue, "remarks", translate("Remarks"))
 e.width = "15%"
 
 ---- Type
 e = t:option(DummyValue, "type", translate("Type"))
+e.cfgvalue = function(t, n)
+    local v = Value.cfgvalue(t, n)
+    if v then
+        if v == "Xray" then
+            local protocol = m:get(n, "protocol")
+            if protocol == "vmess" then
+                protocol = "VMess"
+            elseif protocol == "vless" then
+                protocol = "VLESS"
+            else
+                protocol = protocol:gsub("^%l",string.upper)
+            end
+            return v .. " -> " .. protocol
+        end
+        return v
+    end
+end
 
 e = t:option(DummyValue, "port", translate("Port"))
+
+e = t:option(Flag, "log", translate("Enable") .. translate("Log"))
+e.default = "1"
+e.rmempty = false
 
 m:append(Template("passwall/server/log"))
 

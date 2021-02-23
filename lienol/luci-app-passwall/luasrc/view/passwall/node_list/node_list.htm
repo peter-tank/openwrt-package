@@ -1,11 +1,7 @@
 <%
-	-- Copyright 2018-2020 Lienol <lawlienol@gmail.com>
-	local api = require "luci.model.cbi.passwall.api.api"
-	local dsp = require "luci.dispatcher"
-	
-	local tcp_node_num = api.uci_get_type("global_other", "tcp_node_num", 1)
-	local udp_node_num = api.uci_get_type("global_other", "udp_node_num", 1)
-	local compact_display_nodes = api.uci_get_type("global_other", "compact_display_nodes", 1)
+-- Copyright (C) 2018-2020 L-WRT Team
+-- Copyright (C) 2021 xiaorouji
+local api = require "luci.model.cbi.passwall.api.api"
 -%>
 
 <style>
@@ -15,7 +11,7 @@ table th, .table .th {
 
 table td, .table .td {
 	text-align: center;
-    white-space: nowrap;
+    /* white-space: nowrap; */
     word-break: keep-all;
 }
 
@@ -32,7 +28,15 @@ table td, .table .td {
 }
 
 ._select {
-	background: #dad8d8;
+	background: #dad8d8 !important;
+}
+
+._now_use {
+	background: #94e1ff !important;
+}
+
+.ping a:hover{
+	text-decoration : underline;
 }
 </style>
 
@@ -87,6 +91,10 @@ table td, .table .td {
 
 			return obj;
 		}
+	}
+	
+	function copy_node(cbi_id) {
+		window.location.href = '<%=api.url("copy_node")%>' + "?section=" + cbi_id;
 	}
 	
 	var section = "";
@@ -173,12 +181,12 @@ table td, .table .td {
 				}
 			}
 			if (confirm('<%:Are you sure to delete select nodes?%>') == true){
-				XHR.get('<%=dsp.build_url("admin/services/passwall/delete_select_nodes")%>', {
+				XHR.get('<%=api.url("delete_select_nodes")%>', {
 					ids: ids.join()
 				},
 				function(x, data) {
 					if(x && x.status == 200) {
-						window.location.href = '<%=dsp.build_url("admin/services/passwall/node_list")%>';
+						window.location.href = '<%=api.url("node_list")%>';
 					}
 					else {
 						alert("<%:Error%>");
@@ -190,41 +198,57 @@ table td, .table .td {
 		}
 	}
 	
-	function set_node(protocol,number) {
-		if (confirm('<%:Are you sure set to%> ' + protocol.toUpperCase() + "_" + number + '<%:the server?%>')==true){
-			window.location.href = '<%=dsp.build_url("admin/services/passwall/set_node")%>?protocol=' + protocol + '&number=' + number + '&section=' + section;
+	function set_node(protocol) {
+		if (confirm('<%:Are you sure set to%> ' + protocol.toUpperCase() + '<%:the server?%>')==true){
+			window.location.href = '<%=api.url("set_node")%>?protocol=' + protocol + '&section=' + section;
 		}
 	}
 	
 	function get_address_full(id) {
-		<% if compact_display_nodes and tonumber(compact_display_nodes) == 1 then %>
-			var remarks = document.getElementById("cbid.passwall." + id + ".remarks").value;
-			var result = remarks.match("\\（(.+?)\\）");
-			if (result != null) {
-				var full = result[1];
-				var address = full.substring(0, full.lastIndexOf(":"));
-				var port = full.substring(full.lastIndexOf(":") + 1);
-			}
-		<% else %>
-			try {
-				var address = document.getElementById("cbid.passwall." + id + ".address").value;
-				var port = document.getElementById("cbid.passwall." + id + ".port").value;
-			}
-			catch(err){}
-		<% end %>
+		try {
+			var address = document.getElementById("cbid.passwall." + id + ".address").value;
+			var port = document.getElementById("cbid.passwall." + id + ".port").value;
+		}
+		catch(err){}
 		//判断是否含有汉字
 		var reg = new RegExp("[\\u4E00-\\u9FFF]+","g");
-		if ((address != null && address != "") && (port != null && port != "") && reg.test(address) == false && (address.indexOf(".") != -1 && address.charAt(address.address - 1) != ".")) {
+		if ((address != null && address != "") && (port != null && port != "") && reg.test(address) == false) {
 			return { address: address, port: port };
 		} else {
 			return null;
 		}
 	}
 	
+	//获取当前使用的节点
+	function get_now_use_node() {
+		XHR.get('<%=api.url("get_now_use_node")%>', null,
+			function(x, result) {
+				var id = result["TCP"];
+				if (id) {
+					var dom = document.getElementById("cbi-passwall-" + id);
+					if (dom) {
+						dom.classList.add("_now_use");
+						dom.title = "当前TCP节点";
+						//var v = "<a style='color: red'>当前TCP节点：</a>" + document.getElementById("cbid.passwall." + id + ".remarks").value;
+						//document.getElementById("cbi-passwall-" + id + "-remarks").innerHTML = v;
+					}
+				}
+				id = result["UDP"];
+				if (id) {
+					var dom = document.getElementById("cbi-passwall-" + id);
+					if (dom) {
+						dom.classList.add("_now_use");
+						dom.title = "当前UDP节点";
+					}
+				}
+			}
+		);
+	}
+	
 	function ping_node(cbi_id, dom) {
 		var full = get_address_full(cbi_id);
 		if (full != null) {
-			XHR.get('<%=dsp.build_url("admin/services/passwall/ping_node")%>', {
+			XHR.get('<%=api.url("ping_node")%>', {
 					address: full.address,
 					port: full.port
 				},
@@ -249,9 +273,9 @@ table td, .table .td {
 	
 	/* 自动Ping */
 	var nodes = [];
-	const auto_ping_value = document.getElementsByClassName('auto_ping_value');
-	for (var i = 0; i < auto_ping_value.length; i++) {
-		var cbi_id = auto_ping_value[i].getAttribute("cbiid");
+	const ping_value = document.getElementsByClassName('ping_value');
+	for (var i = 0; i < ping_value.length; i++) {
+		var cbi_id = ping_value[i].getAttribute("cbiid");
 		var full = get_address_full(cbi_id);
 		if (full != null) {
 			var flag = false;
@@ -273,11 +297,13 @@ table td, .table .td {
 		}
 	}
 	
+	get_now_use_node();
+	
 	const _xhr = (index) => {
 		return new Promise((res) => {
 			const dom = nodes[index];
 			if (!dom) res()
-			ajax.post('<%=dsp.build_url("admin/services/passwall/ping_node")%>', {
+			ajax.post('<%=api.url("ping_node")%>', {
 					index: dom.indexs,
 					address: dom.address,
 					port: dom.port
@@ -287,15 +313,15 @@ table td, .table .td {
 						var strs = dom.indexs.split(",");
 						for (var i = 0; i < strs.length; i++) {
 							if (result.ping == null || result.ping.trim() == "") {
-								auto_ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
+								ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
 							} else {
 								var ping = parseInt(result.ping);
 								if (ping < 100)
-									auto_ping_value[strs[i]].innerHTML = "<font style='color:green'>" + result.ping + " ms" + "</font>";
+									ping_value[strs[i]].innerHTML = "<font style='color:green'>" + result.ping + " ms" + "</font>";
 								else if (ping < 200)
-									auto_ping_value[strs[i]].innerHTML = "<font style='color:#fb9a05'>" + result.ping + " ms" + "</font>";
+									ping_value[strs[i]].innerHTML = "<font style='color:#fb9a05'>" + result.ping + " ms" + "</font>";
 								else if (ping >= 200)
-									auto_ping_value[strs[i]].innerHTML = "<font style='color:red'>" + result.ping + " ms" + "</font>";
+									ping_value[strs[i]].innerHTML = "<font style='color:red'>" + result.ping + " ms" + "</font>";
 							}
 						}
 					}
@@ -305,7 +331,7 @@ table td, .table .td {
 				function(x) {
 					var strs = dom.indexs.split(",");
 					for (var i = 0; i < strs.length; i++) {
-						auto_ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
+						ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
 					}
 					res();
 				}
@@ -333,7 +359,7 @@ table td, .table .td {
 		var indexs = nodes[index].indexs;
 		var address = nodes[index].address;
 		var port = nodes[index].port;
-		ajax.post('<%=dsp.build_url("admin/services/passwall/ping_node")%>', {
+		ajax.post('<%=api.url("ping_node")%>', {
 				index: indexs,
 				address: address,
 				port: port
@@ -343,15 +369,15 @@ table td, .table .td {
 					var strs = indexs.split(",");
 					for (var i = 0; i < strs.length; i++) {
 						if (result.ping == null || result.ping.trim() == "") {
-							auto_ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
+							ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
 						} else {
 							var ping = parseInt(result.ping);
 							if (ping < 100)
-								auto_ping_value[strs[i]].innerHTML = "<font style='color:green'>" + result.ping + " ms" + "</font>";
+								ping_value[strs[i]].innerHTML = "<font style='color:green'>" + result.ping + " ms" + "</font>";
 							else if (ping < 200)
-								auto_ping_value[strs[i]].innerHTML = "<font style='color:#fb9a05'>" + result.ping + " ms" + "</font>";
+								ping_value[strs[i]].innerHTML = "<font style='color:#fb9a05'>" + result.ping + " ms" + "</font>";
 							else if (ping >= 200)
-								auto_ping_value[strs[i]].innerHTML = "<font style='color:red'>" + result.ping + " ms" + "</font>";
+								ping_value[strs[i]].innerHTML = "<font style='color:red'>" + result.ping + " ms" + "</font>";
 						}
 					}
 				}
@@ -361,7 +387,7 @@ table td, .table .td {
 			function(x) {
 				var strs = indexs.split(",");
 				for (var i = 0; i < strs.length; i++) {
-					auto_ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
+					ping_value[strs[i]].innerHTML = "<font style='color:red'><%:Timeout%></font>";
 				}
 				index++;
 				return auto_ping();
@@ -372,18 +398,20 @@ table td, .table .td {
 	*/
 	
 	var edit_btn = document.getElementById("cbi-passwall-nodes").getElementsByClassName("cbi-button cbi-button-edit");
-	for(var i = 0; i < edit_btn.length; i++) {
+	for (var i = 0; i < edit_btn.length; i++) {
 		try {
 			var onclick_str = edit_btn[i].getAttribute("onclick");
 			var id = onclick_str.substring(onclick_str.lastIndexOf('/') + 1, onclick_str.length - 1);
 			var td = edit_btn[i].parentNode;
 			var new_div = "";
-			//添加"置顶"按钮到"修改"按钮前
+			//添加"置顶"按钮
 			new_div += '<input class="cbi-button" type="button" value="<%:To Top%>" onclick="_cbi_row_top(\'' + id + '\')"/>&nbsp;&nbsp;';
-			//添加"选择"按钮到"修改"按钮前
+			//添加"选择"按钮
 			new_div += '<input class="cbi-button cbi-button-add" type="button" value="<%:Select%>" id="select_' + id + '" onclick="select_node_div(this, \'' + id + '\')"/>&nbsp;&nbsp;';
-			//添加"应用"按钮到"修改"按钮前
+			//添加"应用"按钮
 			new_div += '<input class="cbi-button cbi-button-apply" type="button" value="<%:Use%>" id="apply_' + id + '" onclick="open_set_node_div(\'' + id + '\')"/>&nbsp;&nbsp;';
+			//添加"复制"按钮
+			new_div += '<input class="cbi-button cbi-button-add" type="button" value="<%:Copy%>" onclick="copy_node(\'' + id + '\')"/>&nbsp;&nbsp;';
 			td.innerHTML = new_div + td.innerHTML;
 		}
 		catch(err) {
@@ -396,19 +424,10 @@ table td, .table .td {
 
 <div style="display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; -webkit-justify-content: center; justify-content: center;">
 	<div id="set_node_div">
-		<div class="cbi-value"><%:You choose node is:%><span id="set_node_name"></span></div>
+		<div class="cbi-value"><%:You choose node is:%><a style="color: red" id="set_node_name"></a></div>
 		<div class="cbi-value">
-			<% if tcp_node_num and tonumber(tcp_node_num) >= 1 then %>
-				<% for i = 1, tcp_node_num, 1 do %>
-					<input class="cbi-button cbi-button-edit" type="button" onclick="set_node('tcp',<%=i%>)" value="TCP_<%=i%>" />
-				<% end %>
-			<% end %>
-			
-			<% if udp_node_num and tonumber(udp_node_num) >= 1 then %>
-				<% for i = 1, udp_node_num, 1 do %>
-					<input class="cbi-button cbi-button-edit" type="button" onclick="set_node('udp',<%=i%>)" value="UDP_<%=i%>" />
-				<% end %>
-			<% end %>
+			<input class="cbi-button cbi-button-edit" type="button" onclick="set_node('tcp')" value="TCP" />
+			<input class="cbi-button cbi-button-edit" type="button" onclick="set_node('udp')" value="UDP" />
 			<input class="cbi-button cbi-button-remove" type="button" onclick="close_set_node_div()" value="<%:Close%>" />
 		</div>
 	</div>

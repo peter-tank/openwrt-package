@@ -1,7 +1,9 @@
 #!/bin/sh
 
 CONFIG=passwall
-RUN_BIN_PATH=/var/etc/${CONFIG}/bin
+TMP_PATH=/var/etc/$CONFIG
+TMP_BIN_PATH=$TMP_PATH/bin
+TMP_ID_PATH=$TMP_PATH/id
 
 config_n_get() {
 	local ret=$(uci -q get $CONFIG.$1.$2 2>/dev/null)
@@ -15,7 +17,7 @@ config_t_get() {
 	echo ${ret:=$3}
 }
 
-if [ "$(ps -w | grep -v grep | grep $CONFIG/monitor.sh | wc -l)" -gt 2 ]; then
+if [ "$(top -bn1 | grep -v grep | grep $CONFIG/monitor.sh | wc -l)" -gt 2 ]; then
 	exit 1
 fi
 
@@ -23,74 +25,71 @@ ENABLED=$(config_t_get global enabled 0)
 [ "$ENABLED" != 1 ] && return 1
 ENABLED=$(config_t_get global_delay start_daemon 0)
 [ "$ENABLED" != 1 ] && return 1
-sleep 1m
+sleep 58s
 while [ "$ENABLED" -eq 1 ]
 do
-	TCP_NODE_NUM=$(config_t_get global_other tcp_node_num 1)
-	for i in $(seq 1 $TCP_NODE_NUM); do
-		eval TCP_NODE$i=$(config_t_get global tcp_node$i nil)
-	done
-
-	UDP_NODE_NUM=$(config_t_get global_other udp_node_num 1)
-	for i in $(seq 1 $UDP_NODE_NUM); do
-		eval UDP_NODE$i=$(config_t_get global udp_node$i nil)
-	done
-
-	dns_mode=$(config_t_get global dns_mode)
-	use_haproxy=$(config_t_get global_haproxy balancing_enable 0)
-
-	#tcp
-	for i in $(seq 1 $TCP_NODE_NUM); do
-		eval tmp_node=\$TCP_NODE$i
-		if [ "$tmp_node" != "nil" ]; then
+	#TCP
+	[ -f "$TMP_ID_PATH/TCP" ] && {
+		TCP_NODE=$(cat $TMP_ID_PATH/TCP)
+		if [ "$TCP_NODE" != "nil" ]; then
 			#kcptun
-			use_kcp=$(config_n_get $tmp_node use_kcp 0)
+			use_kcp=$(config_n_get $TCP_NODE use_kcp 0)
 			if [ $use_kcp -gt 0 ]; then
-				icount=$(ps -w | grep -v grep | grep "$RUN_BIN_PATH/kcptun" | grep -i "tcp_${i}" | wc -l)
+				icount=$(top -bn1 | grep -v grep | grep "$TMP_BIN_PATH/kcptun" | grep -i "tcp" | wc -l)
 				if [ $icount = 0 ]; then
-					/etc/init.d/passwall restart
+					/etc/init.d/$CONFIG restart
 					exit 0
 				fi
 			fi
-			icount=$(ps -w | grep -v -E 'grep|kcptun' | grep "$RUN_BIN_PATH" | grep -i "TCP_${i}" | wc -l)
+			icount=$(top -bn1 | grep -v -E 'grep|kcptun' | grep "$TMP_BIN_PATH" | grep -i "TCP" | wc -l)
 			if [ $icount = 0 ]; then
-				/etc/init.d/passwall restart
+				/etc/init.d/$CONFIG restart
 				exit 0
 			fi
 		fi
-	done
+	}
 
 	#udp
-	for i in $(seq 1 $UDP_NODE_NUM); do
-		eval tmp_node=\$UDP_NODE$i
-		if [ "$tmp_node" != "nil" ]; then
-			[ "$tmp_node" == "tcp" ] && continue
-			[ "$tmp_node" == "tcp_" ] && tmp_node=$TCP_NODE1
-			icount=$(ps -w | grep -v grep | grep "$RUN_BIN_PATH" | grep -i "UDP_${i}" | wc -l)
+	[ -f "$TMP_ID_PATH/UDP" ] && {
+		UDP_NODE=$(cat $TMP_ID_PATH/UDP)
+		if [ "$UDP_NODE" != "nil" ]; then
+			[ "$UDP_NODE" == "tcp" ] && continue
+			[ "$UDP_NODE" == "tcp_" ] && UDP_NODE=$TCP_NODE
+			icount=$(top -bn1 | grep -v grep | grep "$TMP_BIN_PATH" | grep -i "UDP" | wc -l)
 			if [ $icount = 0 ]; then
-				/etc/init.d/passwall restart
+				/etc/init.d/$CONFIG restart
 				exit 0
 			fi
 		fi
-	done
+	}
 
 	#dns
-	if [ "$dns_mode" != "nonuse" ]; then
+	dns_mode=$(config_t_get global dns_mode)
+	if [ "$dns_mode" != "nonuse" ] && [ "$dns_mode" != "custom" ] && [ "$dns_mode" != "fake_ip" ]; then
 		icount=$(netstat -apn | grep 7913 | wc -l)
 		if [ $icount = 0 ]; then
-			/etc/init.d/passwall restart
-			exit 0
-		fi
-	fi
-
-	#haproxy
-	if [ $use_haproxy -gt 0 ]; then
-		icount=$(ps -w | grep -v grep | grep "$RUN_BIN_PATH/haproxy" | wc -l)
-		if [ $icount = 0 ]; then
-			/etc/init.d/passwall restart
+			/etc/init.d/$CONFIG restart
 			exit 0
 		fi
 	fi
 	
-	sleep 1m
+	[ -f "$TMP_BIN_PATH/chinadns-ng" ] && {
+		icount=$(top -bn1 | grep -v grep | grep $TMP_BIN_PATH/chinadns-ng | wc -l)
+		if [ $icount = 0 ]; then
+			/etc/init.d/$CONFIG restart
+			exit 0
+		fi
+	}
+
+	#haproxy
+	use_haproxy=$(config_t_get global_haproxy balancing_enable 0)
+	if [ $use_haproxy -gt 0 ]; then
+		icount=$(top -bn1 | grep -v grep | grep "$TMP_BIN_PATH/haproxy" | wc -l)
+		if [ $icount = 0 ]; then
+			/etc/init.d/$CONFIG restart
+			exit 0
+		fi
+	fi
+	
+	sleep 58s
 done

@@ -1,11 +1,13 @@
 <%
-local trojan_go_version = require "luci.model.cbi.passwall.api.api".get_trojan_go_version()
+local api = require "luci.model.cbi.passwall.api.api"
+local trojan_go_version = api.get_trojan_go_version()
 -%>
 
 <script type="text/javascript">
 	//<![CDATA[
 	var trojanInfo;
 	var tokenStr = '<%=token%>';
+	var manuallyUpdateText = '<%:Manually update%>';
 	var noUpdateText = '<%:It is the latest version%>';
 	var updateSuccessText = '<%:Update successful%>';
 	var clickToUpdateText = '<%:Click to update%>';
@@ -48,7 +50,7 @@ local trojan_go_version = require "luci.model.cbi.passwall.api.api".get_trojan_g
 
 	function onRequestError_trojan(btn, errorMessage) {
 		btn.disabled = false;
-		btn.value = btn.placeholder;
+		btn.value = manuallyUpdateText;
 
 		if(errorMessage) {
 			alert(errorMessage);
@@ -71,7 +73,7 @@ local trojan_go_version = require "luci.model.cbi.passwall.api.api".get_trojan_g
 
 		var ckeckDetailElm = document.getElementById(btn.id + '-detail');
 
-		XHR.get('<%=url([[admin]], [[services]], [[passwall]], [[trojan_go_check]])%>', {
+		XHR.get('<%=api.url("trojan_go_check")%>', {
 			token: tokenStr,
 			arch: ''
 		}, function(x,json) {
@@ -111,7 +113,7 @@ local trojan_go_version = require "luci.model.cbi.passwall.api.api".get_trojan_g
 
 		addPageNotice_trojan();
 
-		var trojanUpdateUrl = '<%=url([[admin]], [[services]], [[passwall]], [[trojan_go_update]])%>';
+		var trojanUpdateUrl = '<%=api.url("trojan_go_update")%>';
 		// Download file
 		XHR.get(trojanUpdateUrl, {
 			token: tokenStr,

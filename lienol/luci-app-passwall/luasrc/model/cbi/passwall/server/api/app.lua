@@ -4,7 +4,7 @@ local action = arg[1]
 local sys = require 'luci.sys'
 local jsonc = require "luci.jsonc"
 local ucic = require"luci.model.uci".cursor()
-local _api = require "luci.model.cbi.passwall.api.api"
+local api = require "luci.model.cbi.passwall.api.api"
 
 local CONFIG = "passwall_server"
 local CONFIG_PATH = "/var/etc/" .. CONFIG
@@ -24,17 +24,24 @@ local function cmd(cmd)
     sys.call(cmd)
 end
 
-local function ln_start(s, d, command)
+local function ln_start(s, d, command, output)
+    if not output then
+        output = "/dev/null"
+    end
     d = TMP_BIN_PATH .. "/" .. d
     cmd(string.format('[ ! -f "%s" ] && ln -s %s %s 2>/dev/null', d, s, d))
-    return string.format("%s >/dev/null 2>&1 &", d .. " " ..command)
+    return string.format("%s >%s 2>&1 &", d .. " " ..command, output)
 end
 
 local function gen_include()
     cmd(string.format("echo '#!/bin/sh' > /var/etc/%s.include", CONFIG))
-    local function extract_rules(a)
+    local function extract_rules(n, a)
+        local _ipt = "iptables"
+        if n == "6" then
+            _ipt = "ip6tables"
+        end
         local result = "*" .. a
-        result = result .. "\n" .. sys.exec('iptables-save -t ' .. a .. ' | grep "PSW-SERVER" | sed -e "s/^-A \\(INPUT\\)/-I \\1 1/"')
+        result = result .. "\n" .. sys.exec(_ipt .. '-save -t ' .. a .. ' | grep "PSW-SERVER" | sed -e "s/^-A \\(INPUT\\)/-I \\1 1/"')
         result = result .. "COMMIT"
         return result
     end
@@ -42,7 +49,11 @@ local function gen_include()
     if f and err == nil then
         f:write('iptables-save -c | grep -v "PSW-SERVER" | iptables-restore -c' .. "\n")
         f:write('iptables-restore -n <<-EOT' .. "\n")
-        f:write(extract_rules("filter") .. "\n")
+        f:write(extract_rules("4", "filter") .. "\n")
+        f:write("EOT" .. "\n")
+        f:write('ip6tables-save -c | grep -v "PSW-SERVER" | ip6tables-restore -c' .. "\n")
+        f:write('ip6tables-restore -n <<-EOT' .. "\n")
+        f:write(extract_rules("6", "filter") .. "\n")
         f:write("EOT" .. "\n")
         f:close()
     end
@@ -57,10 +68,19 @@ local function start()
     cmd(string.format("touch %s", LOG_APP_FILE))
     cmd("iptables -N PSW-SERVER")
     cmd("iptables -I INPUT -j PSW-SERVER")
+    cmd("ip6tables -N PSW-SERVER")
+    cmd("ip6tables -I INPUT -j PSW-SERVER")
     ucic:foreach(CONFIG, "user", function(user)
         local id = user[".name"]
         local enable = user.enable
         if enable and tonumber(enable) == 1 then
+            local enable_log = user.log
+            local log_path = nil
+            if enable_log and enable_log == "1" then
+                log_path = CONFIG_PATH .. "/" .. id .. ".log"
+            else
+                log_path = nil
+            end
             local remarks = user.remarks
             local port = tonumber(user.port)
             local bin
@@ -68,30 +88,43 @@ local function start()
             local config_file = CONFIG_PATH .. "/" .. id .. ".json"
             local udp_forward = 1
             local type = user.type or ""
-            if type == "SSR" then
-                config = require("luci.model.cbi.passwall.server.api.ssr").gen_config(user)
+            if type == "Socks" then
+                local auth = ""
+                if user.auth and user.auth == "1" then
+                    local username = user.username or ""
+                    local password = user.password or ""
+                    if username ~= "" and password ~= "" then
+                        username = "-u " .. username
+                        password = "-P " .. password
+                        auth = username .. " " .. password
+                    end
+                end
+                bin = ln_start("/usr/bin/microsocks", "microsocks_" .. id, string.format("-i :: -p %s %s", port, auth), log_path)
+            elseif type == "SS" or type == "SSR" then
+                config = require("luci.model.cbi.passwall.server.api.shadowsocks").gen_config(user)
                 local udp_param = ""
                 udp_forward = tonumber(user.udp_forward) or 1
                 if udp_forward == 1 then
                     udp_param = "-u"
                 end
-                bin = ln_start("/usr/bin/ssr-server", "ssr-server", "-c " .. config_file .. " " .. udp_param)
-            elseif type == "V2ray" then
-                config = require("luci.model.cbi.passwall.server.api.v2ray").gen_config(user)
-                bin = ln_start(_api.get_v2ray_path(), "v2ray", "-config=" .. config_file)
+                type = type:lower()
+                bin = ln_start("/usr/bin/" .. type .. "-server", type .. "-server", "-c " .. config_file .. " " .. udp_param, log_path)
+            elseif type == "Xray" then
+                config = require("luci.model.cbi.passwall.server.api.xray").gen_config(user)
+                bin = ln_start(api.get_xray_path(), "xray", "-config=" .. config_file, log_path)
             elseif type == "Trojan" then
                 config = require("luci.model.cbi.passwall.server.api.trojan").gen_config(user)
-                bin = ln_start("/usr/sbin/trojan", "trojan", "-c " .. config_file)
+                bin = ln_start("/usr/sbin/trojan", "trojan", "-c " .. config_file, log_path)
             elseif type == "Trojan-Plus" then
                 config = require("luci.model.cbi.passwall.server.api.trojan").gen_config(user)
-                bin = ln_start("/usr/sbin/trojan-plus", "trojan-plus", "-c " .. config_file)
+                bin = ln_start("/usr/sbin/trojan-plus", "trojan-plus", "-c " .. config_file, log_path)
             elseif type == "Trojan-Go" then
                 config = require("luci.model.cbi.passwall.server.api.trojan").gen_config(user)
-                bin = ln_start(_api.get_trojan_go_path(), "trojan-go", "-config " .. config_file)
+                bin = ln_start(api.get_trojan_go_path(), "trojan-go", "-config " .. config_file, log_path)
             elseif type == "Brook" then
                 local brook_protocol = user.protocol
                 local brook_password = user.password
-                bin = ln_start(_api.get_brook_path(), "brook_" .. id, string.format("%s -l :%s -p %s", brook_protocol, port, brook_password))
+                bin = ln_start(api.get_brook_path(), "brook_" .. id, string.format("%s -l :%s -p %s", brook_protocol, port, brook_password), log_path)
             end
 
             if next(config) then
@@ -110,8 +143,10 @@ local function start()
             local bind_local = user.bind_local or 0
             if bind_local and tonumber(bind_local) ~= 1 then
                 cmd(string.format('iptables -A PSW-SERVER -p tcp --dport %s -m comment --comment "%s" -j ACCEPT', port, remarks))
+                cmd(string.format('ip6tables -A PSW-SERVER -p tcp --dport %s -m comment --comment "%s" -j ACCEPT', port, remarks))
                 if udp_forward == 1 then
                     cmd(string.format('iptables -A PSW-SERVER -p udp --dport %s -m comment --comment "%s" -j ACCEPT', port, remarks))
+                    cmd(string.format('ip6tables -A PSW-SERVER -p udp --dport %s -m comment --comment "%s" -j ACCEPT', port, remarks))
                 end 
             end
         end
@@ -120,10 +155,13 @@ local function start()
 end
 
 local function stop()
-    cmd(string.format("ps -w | grep -v 'grep' | grep '%s/' | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1 &", CONFIG_PATH))
+    cmd(string.format("top -bn1 | grep -v 'grep' | grep '%s/' | awk '{print $1}' | xargs kill -9 >/dev/null 2>&1", CONFIG_PATH))
     cmd("iptables -D INPUT -j PSW-SERVER 2>/dev/null")
     cmd("iptables -F PSW-SERVER 2>/dev/null")
     cmd("iptables -X PSW-SERVER 2>/dev/null")
+    cmd("ip6tables -D INPUT -j PSW-SERVER 2>/dev/null")
+    cmd("ip6tables -F PSW-SERVER 2>/dev/null")
+    cmd("ip6tables -X PSW-SERVER 2>/dev/null")
     cmd(string.format("rm -rf %s %s /var/etc/%s.include", CONFIG_PATH, LOG_APP_FILE, CONFIG))
 end
 
